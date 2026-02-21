@@ -173,4 +173,90 @@ def try_resolve_collision_no_chain(state, mover_pid, target_pos):
     if occ is None or occ == mover_pid:
         return True, ""
 
-    pair_pos = PAIR_
+    pair_pos = PAIR.get(target_pos)
+    if pair_pos is None:
+        return False, "無對應格，流局。"
+
+    occ_at_pair = occupant_pid_at(state.players, pair_pos)
+    if occ_at_pair is not None and occ_at_pair != occ:
+        return False, "兩格皆有人，流局。"
+
+    find_player(state, occ).pos = pair_pos
+    return True, "推人成功（三沖不連鎖）"
+
+
+# -------------------------
+# SVG
+# -------------------------
+def spiral_xy(i, size=560):
+    cx = cy = size / 2
+    t = i / END_POS
+    angle = -math.pi/2 + 2*math.pi*2.6*t
+    r = size*0.44*(1-t) + size*0.09*t
+    return cx + r*math.cos(angle), cy + r*math.sin(angle)
+
+
+def render_board(state):
+    size = 560
+    elems = []
+    for i in range(END_POS+1):
+        x,y = spiral_xy(i,size)
+        elems.append(f'<text x="{x}" y="{y}" font-size="16" text-anchor="middle" dominant-baseline="middle">{icon_for_pos(i)}</text>')
+    for p in state.players:
+        x,y = spiral_xy(p.pos,size)
+        elems.append(f'<text x="{x}" y="{y}" font-size="24" text-anchor="middle" dominant-baseline="middle">{p.token}</text>')
+    return f'<svg width="{size}" height="{size}">{"".join(elems)}</svg>'
+
+
+# -------------------------
+# UI
+# -------------------------
+st.set_page_config(page_title="葫蘆運 Online", layout="wide")
+db_init()
+
+pid = ensure_pid()
+st.title("🎲 葫蘆運 Online（穩定版）")
+
+room = st.sidebar.text_input("房號", "8888")
+name = st.sidebar.text_input("暱稱", f"玩家{random.randint(1,99)}")
+token = st.sidebar.selectbox("棋子", TOKENS)
+
+if st.sidebar.button("建立房間"):
+    state = RoomState(room=room, players=[Player(pid,name,token)])
+    room_save(state)
+
+if st.sidebar.button("加入房間"):
+    state = room_load(room)
+    if state and not any(p.pid==pid for p in state.players):
+        state.players.append(Player(pid,name,token))
+        room_save(state)
+
+state = room_load(room)
+if not state:
+    st.stop()
+
+left,right = st.columns([1.25,0.75])
+
+with right:
+    st.subheader("玩家")
+    st.write([(p.name,p.pos,p.score) for p in state.players])
+
+with left:
+    st.markdown(render_board(state), unsafe_allow_html=True)
+
+    if len(state.players)>=2 and state.players[0].pid==pid:
+        if st.button("🎲 擲骰並走"):
+            mover = state.players[state.turn%len(state.players)]
+            d1,d2,steps = roll_two_dice()
+            pos1 = bounce_move(mover.pos,steps)
+            pos2 = jump_if_needed(pos1)
+            ok,_ = try_resolve_collision_no_chain(state,mover.pid,pos2)
+            if not ok:
+                for p in state.players:
+                    p.pos=0
+                state.turn=0
+            else:
+                mover.pos=pos2
+                state.turn+=1
+            room_save(state)
+            st.rerun()
