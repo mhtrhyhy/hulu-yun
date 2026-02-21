@@ -6,102 +6,73 @@ import os
 import random
 import sqlite3
 import time
-from dataclasses import dataclass, asdict
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import List, Optional
 
 import streamlit as st
 
 # -------------------------
-# CONFIG
+# 基本設定
 # -------------------------
 END_POS = 47
-MIN_PLAYERS = 2
-MAX_PLAYERS = 6
 DB_PATH = "rooms.sqlite3"
 
-PAIR: Dict[int, int] = {
+PAIR = {
     1: 10, 10: 1, 2: 14, 14: 2, 3: 12, 12: 3, 4: 15, 15: 4, 5: 20, 20: 5,
-    6: 18, 18: 6, 7: 23, 23: 7, 8: 22, 22: 8, 9: 37, 37: 9, 11: 34, 34: 11,
-    13: 28, 28: 13, 16: 42, 42: 16, 17: 26, 26: 17, 19: 30, 30: 19, 21: 32, 32: 21,
-    24: 35, 35: 24, 25: 46, 46: 25, 27: 36, 36: 27, 29: 40, 40: 29, 31: 45, 45: 31,
-    33: 41, 41: 33, 38: 43, 43: 38, 39: 44, 44: 39
+    6: 18, 18: 6, 7: 23, 23: 7, 8: 22, 22: 8, 9: 37, 37: 9,
+    11: 34, 34: 11, 13: 28, 28: 13, 16: 42, 42: 16, 17: 26, 26: 17,
+    19: 30, 30: 19, 21: 32, 32: 21, 24: 35, 35: 24, 25: 46, 46: 25,
+    27: 36, 36: 27, 29: 40, 40: 29, 31: 45, 45: 31, 33: 41, 41: 33,
+    38: 43, 43: 38, 39: 44, 44: 39
 }
 
-SYMBOL_ICON = {
-    0: "🏁", 47: "🧙‍♂️",
-    1: "🐰", 2: "🫏", 3: "🫙", 4: "🧓", 5: "🐔", 6: "🐯",
-    7: "🎭", 8: "🐟", 9: "💪", 11: "🧧", 13: "👴", 16: "🔔",
-    17: "🧹", 19: "🧝‍♀️", 21: "🪵", 24: "🐦", 25: "🪙",
-    27: "🥬", 29: "🦌", 31: "🐲", 33: "🐢", 38: "🐴", 39: "🌸",
-}
-
-TOKENS = ["🐼", "🐸", "🦊", "🐯", "🐵", "🦄", "🐙", "🦁", "🐰", "🐲"]
-
-
-def icon_for_pos(i: int) -> str:
-    if i in (0, END_POS):
-        return SYMBOL_ICON[i]
-    if i in PAIR:
-        a = min(i, PAIR[i])
-        return SYMBOL_ICON.get(a, "•")
-    return "•"
-
+TOKENS = ["🐼","🐸","🦊","🐯","🐵","🦄","🐙","🦁","🐰","🐲"]
 
 # -------------------------
-# MODELS
+# 資料模型
 # -------------------------
 @dataclass
 class Player:
     pid: str
     name: str
     token: str
-    pos: int = 0
-    score: int = 0
-
+    pos: int
+    score: int
 
 @dataclass
 class RoomState:
     room: str
     players: List[Player]
-    turn: int = 0
-    log: List[str] = None
-    ended: bool = False
-    winner_pid: Optional[str] = None
-    draws: int = 0
-    last_roll: Optional[Tuple[int, int, int]] = None
-
-    def __post_init__(self):
-        if self.log is None:
-            self.log = []
+    turn: int
+    log: List[str]
+    ended: bool
 
 
 # -------------------------
-# DB
+# SQLite
 # -------------------------
 def db_init():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("""
-      CREATE TABLE IF NOT EXISTS rooms(
+    CREATE TABLE IF NOT EXISTS rooms(
         room TEXT PRIMARY KEY,
-        state_json TEXT NOT NULL
-      )
+        state_json TEXT
+    )
     """)
     conn.commit()
     conn.close()
 
-
-def serialize_state(state: RoomState) -> str:
-    d = asdict(state)
-    d["players"] = [asdict(p) for p in state.players]
-    return json.dumps(d, ensure_ascii=False)
-
-
-def deserialize_state(s: str) -> RoomState:
-    d = json.loads(s)
-    players = [Player(**p) for p in d["players"]]
-    return RoomState(**{k: d[k] for k in d if k != "players"}, players=players)
-
+def room_save(state: RoomState):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO rooms(room, state_json) VALUES(?,?) "
+        "ON CONFLICT(room) DO UPDATE SET state_json=excluded.state_json",
+        (state.room, json.dumps(state, default=lambda o: o.__dict__, ensure_ascii=False))
+    )
+    conn.commit()
+    conn.close()
 
 def room_load(room: str) -> Optional[RoomState]:
     conn = sqlite3.connect(DB_PATH)
@@ -111,146 +82,125 @@ def room_load(room: str) -> Optional[RoomState]:
     conn.close()
     if not row:
         return None
-    return deserialize_state(row[0])
-
-
-def room_save(state: RoomState) -> None:
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO rooms(room, state_json) VALUES(?,?) "
-        "ON CONFLICT(room) DO UPDATE SET state_json=excluded.state_json",
-        (state.room, serialize_state(state)),
+    d = json.loads(row[0])
+    players = [Player(**p) for p in d["players"]]
+    return RoomState(
+        room=d["room"],
+        players=players,
+        turn=d["turn"],
+        log=d["log"],
+        ended=d["ended"]
     )
-    conn.commit()
-    conn.close()
-
 
 # -------------------------
-# GAME LOGIC
+# 遊戲邏輯
 # -------------------------
 def ensure_pid():
     if "pid" not in st.session_state:
-        st.session_state.pid = base64.urlsafe_b64encode(os.urandom(9)).decode()
+        st.session_state.pid = base64.urlsafe_b64encode(os.urandom(6)).decode()
     return st.session_state.pid
 
+def roll_dice():
+    return random.randint(1,6) + random.randint(1,6)
 
-def roll_two_dice():
-    d1 = random.randint(1, 6)
-    d2 = random.randint(1, 6)
-    return d1, d2, d1 + d2
-
-
-def bounce_move(pos, steps):
+def bounce(pos, steps):
     raw = pos + steps
     if raw <= END_POS:
         return raw
     return END_POS - (raw - END_POS)
 
-
-def jump_if_needed(pos):
+def jump(pos):
     if pos in (0, END_POS):
         return pos
     return PAIR.get(pos, pos)
 
-
-def find_player(state, pid):
-    return next(p for p in state.players if p.pid == pid)
-
-
-def occupant_pid_at(players, pos):
+def occupant(players, pos):
     for p in players:
         if p.pos == pos:
-            return p.pid
+            return p
     return None
 
-
-def try_resolve_collision_no_chain(state, mover_pid, target_pos):
-    if target_pos == 0:
-        return True, ""
-
-    occ = occupant_pid_at(state.players, target_pos)
-    if occ is None or occ == mover_pid:
-        return True, ""
-
-    pair_pos = PAIR.get(target_pos)
-    if pair_pos is None:
-        return False, "無對應格，流局。"
-
-    occ_at_pair = occupant_pid_at(state.players, pair_pos)
-    if occ_at_pair is not None and occ_at_pair != occ:
-        return False, "兩格皆有人，流局。"
-
-    find_player(state, occ).pos = pair_pos
-    return True, "推人成功（三沖不連鎖）"
-
+def resolve_collision(state, mover, target):
+    if target == 0:
+        return True
+    occ = occupant(state.players, target)
+    if not occ or occ.pid == mover.pid:
+        return True
+    pair = PAIR.get(target)
+    if not pair:
+        return False
+    occ2 = occupant(state.players, pair)
+    if occ2 and occ2.pid != occ.pid:
+        return False
+    occ.pos = pair
+    return True
 
 # -------------------------
-# SVG
+# 畫螺旋盤
 # -------------------------
-def spiral_xy(i, size=560):
-    cx = cy = size / 2
-    t = i / END_POS
+def spiral_xy(i, size=520):
+    cx = cy = size/2
+    t = i/END_POS
     angle = -math.pi/2 + 2*math.pi*2.6*t
-    r = size*0.44*(1-t) + size*0.09*t
+    r = size*0.42*(1-t) + size*0.1*t
     return cx + r*math.cos(angle), cy + r*math.sin(angle)
 
-
 def render_board(state):
-    size = 560
-    elems = []
+    size=520
+    elems=[]
     for i in range(END_POS+1):
-        x,y = spiral_xy(i,size)
-        elems.append(f'<text x="{x}" y="{y}" font-size="16" text-anchor="middle" dominant-baseline="middle">{icon_for_pos(i)}</text>')
+        x,y=spiral_xy(i,size)
+        elems.append(f'<text x="{x}" y="{y}" font-size="14" text-anchor="middle" dominant-baseline="middle">{i}</text>')
     for p in state.players:
-        x,y = spiral_xy(p.pos,size)
-        elems.append(f'<text x="{x}" y="{y}" font-size="24" text-anchor="middle" dominant-baseline="middle">{p.token}</text>')
+        x,y=spiral_xy(p.pos,size)
+        elems.append(f'<text x="{x}" y="{y}" font-size="22" text-anchor="middle" dominant-baseline="middle">{p.token}</text>')
     return f'<svg width="{size}" height="{size}">{"".join(elems)}</svg>'
-
 
 # -------------------------
 # UI
 # -------------------------
-st.set_page_config(page_title="葫蘆運 Online", layout="wide")
+st.set_page_config(layout="wide")
 db_init()
-
 pid = ensure_pid()
-st.title("🎲 葫蘆運 Online（穩定版）")
 
-room = st.sidebar.text_input("房號", "8888")
-name = st.sidebar.text_input("暱稱", f"玩家{random.randint(1,99)}")
-token = st.sidebar.selectbox("棋子", TOKENS)
+st.title("🎲 葫蘆運 Online 穩定核心版")
+
+room = st.sidebar.text_input("房號","8888")
+name = st.sidebar.text_input("暱稱",f"玩家{random.randint(1,99)}")
+token = st.sidebar.selectbox("棋子",TOKENS)
 
 if st.sidebar.button("建立房間"):
-    state = RoomState(room=room, players=[Player(pid,name,token)])
+    state = RoomState(room,[Player(pid,name,token,0,0)],0,[],False)
     room_save(state)
 
 if st.sidebar.button("加入房間"):
     state = room_load(room)
     if state and not any(p.pid==pid for p in state.players):
-        state.players.append(Player(pid,name,token))
+        state.players.append(Player(pid,name,token,0,0))
         room_save(state)
 
 state = room_load(room)
 if not state:
     st.stop()
 
-left,right = st.columns([1.25,0.75])
+col1,col2 = st.columns([1.2,0.8])
 
-with right:
+with col2:
     st.subheader("玩家")
     st.write([(p.name,p.pos,p.score) for p in state.players])
+    if st.button("🔄 同步"):
+        st.rerun()
 
-with left:
+with col1:
     st.markdown(render_board(state), unsafe_allow_html=True)
 
-    if len(state.players)>=2 and state.players[0].pid==pid:
+    if len(state.players)>=2 and state.players[0].pid==pid and not state.ended:
         if st.button("🎲 擲骰並走"):
-            mover = state.players[state.turn%len(state.players)]
-            d1,d2,steps = roll_two_dice()
-            pos1 = bounce_move(mover.pos,steps)
-            pos2 = jump_if_needed(pos1)
-            ok,_ = try_resolve_collision_no_chain(state,mover.pid,pos2)
+            mover = state.players[state.turn % len(state.players)]
+            steps = roll_dice()
+            pos1 = bounce(mover.pos,steps)
+            pos2 = jump(pos1)
+            ok = resolve_collision(state,mover,pos2)
             if not ok:
                 for p in state.players:
                     p.pos=0
